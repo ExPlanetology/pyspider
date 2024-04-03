@@ -23,7 +23,7 @@ import logging
 import numpy as np
 
 from spider import CFG_TEST_DATA, Solver, __version__, debug_logger
-from spider.phase import PhaseEvaluator
+from spider.phase import PhaseEvaluatorProtocol
 from spider.utilities import FloatOrArray
 
 logger: logging.Logger = debug_logger()
@@ -49,7 +49,7 @@ def test_liquid_constant_properties():
     solver.parameters.phase_mixed.phase = "liquid"
     solver.initialize()
 
-    phase: PhaseEvaluator = solver.evaluator.phase_basic
+    phase: PhaseEvaluatorProtocol = solver.evaluator.phase_basic
 
     temperature_scaled = temperature / solver.parameters.scalings.temperature
     pressure_scaled = pressure / solver.parameters.scalings.pressure
@@ -81,7 +81,7 @@ def test_solid_constant_properties():
     solver.parameters.phase_mixed.phase = "solid"
     solver.initialize()
 
-    phase: PhaseEvaluator = solver.evaluator.phase_basic
+    phase: PhaseEvaluatorProtocol = solver.evaluator.phase_basic
 
     temperature_scaled = temperature / solver.parameters.scalings.temperature
     pressure_scaled = pressure / solver.parameters.scalings.pressure
@@ -111,7 +111,7 @@ def test_lookup_property_1D():
 
     solver: Solver = Solver("abe_mixed_lookup.cfg", CFG_TEST_DATA)
     solver.initialize()
-    phase: PhaseEvaluator = solver.evaluator.phase_basic
+    phase: PhaseEvaluatorProtocol = solver.evaluator.phase_basic
 
     temperature_scaled = temperature / solver.parameters.scalings.temperature
     pressure_scaled = pressure / solver.parameters.scalings.pressure
@@ -136,7 +136,7 @@ def test_lookup_property_2D():
     solver.parameters.phase_mixed.phase = "liquid"
     solver.initialize()
 
-    phase: PhaseEvaluator = solver.evaluator.phase_basic
+    phase: PhaseEvaluatorProtocol = solver.evaluator.phase_basic
 
     temperature_: np.ndarray = np.atleast_2d(
         [[1000, 1500, 2500, 2500, 2500], [1250, 2000, 2000, 2250, 2500]]
@@ -164,7 +164,7 @@ def test_mixed_density():
 
     solver: Solver = Solver("abe_mixed.cfg", CFG_TEST_DATA)
     solver.initialize()
-    phase: PhaseEvaluator = solver.evaluator.phase_basic
+    phase: PhaseEvaluatorProtocol = solver.evaluator.phase_basic
 
     # Chosen to be the melting curve, i.e. 50% melt fraction
     temperature_: np.ndarray = np.atleast_2d([1590.3869054958254, 4521.708837963126]).T
@@ -183,5 +183,5 @@ def test_mixed_density():
     density_mixed: FloatOrArray = phase.density()
     logger.debug("density_mixed = %s", density_mixed)
 
-    density_mixed_target: np.ndarray = np.atleast_2d([1.02439141, 1.02438914]).T
+    density_mixed_target: np.ndarray = np.atleast_2d([1.02439024, 1.02439024]).T
     assert np.isclose(density_mixed, density_mixed_target, atol=ATOL, rtol=RTOL).all()

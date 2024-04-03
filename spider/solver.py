@@ -28,12 +28,12 @@ from scipy.integrate import solve_ivp
 from scipy.optimize import OptimizeResult
 
 from spider.core import BoundaryConditions, InitialCondition
+from spider.interfaces import MixedPhaseEvaluatorProtocol, PhaseEvaluatorProtocol
 from spider.mesh import Mesh
 from spider.parser import Parameters, _Radionuclide
 from spider.phase import (
     CompositePhaseEvaluator,
     MixedPhaseEvaluator,
-    PhaseEvaluator,
     SinglePhaseEvaluator,
 )
 from spider.utilities import FloatOrArray
@@ -45,18 +45,12 @@ logger: logging.Logger = logging.getLogger(__name__)
 class State:
     """Stores and updates the state at temperature and pressure.
 
-    update() minimises the number of function calls by only updating what is required to integrate
-    the energy balance.
-
     Args:
         evaluator: Evaluator
+        _parameters: Parameters
 
     Attributes:
-        conductive_heat_flux: Conductive heat flux at the basic nodes
-        convective_heat_flux: Convective heat flux at the basic nodes
         critical_reynolds_number: Critical Reynolds number
-        dTdr: Temperature gradient at the basic nodes with respect to radius
-        eddy_diffusivity: Eddy diffusivity at the basic nodes
         gravitational_separation_flux: Gravitational separation flux at the basic nodes
         heating: Heat generation at the staggered nodes
         heat_flux: Heat flux at the basic nodes
@@ -74,6 +68,7 @@ class State:
     """
 
     evaluator: Evaluator
+    _parameters: Parameters
     _dTdr: np.ndarray = field(init=False)
     _eddy_diffusivity: np.ndarray = field(init=False)
     _heat_flux: np.ndarray = field(init=False)
@@ -95,7 +90,14 @@ class State:
         return capacitance
 
     def conductive_heat_flux(self) -> np.ndarray:
-        """Conductive heat flux"""
+        r"""Conductive heat flux:
+
+        .. math::
+
+            J_{cond} = -k \frac{\partial T}{\partial r}
+
+        where :math:`k` is thermal conductivity, :math:`T` is temperature, and :math:`r` is radius.
+        """
         conductive_heat_flux: np.ndarray = (
             -self.evaluator.phase_basic.thermal_conductivity() * self.dTdr()
         )
@@ -103,7 +105,16 @@ class State:
         return conductive_heat_flux
 
     def convective_heat_flux(self) -> np.ndarray:
-        """Convective heat flux"""
+        r"""Convective heat flux:
+
+        .. math::
+
+            J_{conv} = -\rho c_p \kappa_h \left( \frac{\partial T}{\partial r} - \left( \frac{\partial T}{\partial r} \right)_S \right)
+
+        where :math:`\rho` is density, :math:`c_p` is heat capacity at constant pressure,
+        :math:`\kappa_h` is eddy diffusivity, :math:`T` is temperature, :math:`r` is radius, and
+        :math:`S` is entropy.
+        """
         convective_heat_flux: np.ndarray = (
             -self.evaluator.phase_basic.density()
             * self.evaluator.phase_basic.heat_capacity()
@@ -276,17 +287,17 @@ class State:
         self._eddy_diffusivity *= self.evaluator.mesh.basic.mixing_length
         # Heat flux
         self._heat_flux = np.zeros_like(self.temperature_basic)
-        if self.evaluator.parameters.energy.conduction:
+        if self._parameters.energy.conduction:
             self._heat_flux += self.conductive_heat_flux()
-        if self.evaluator.parameters.energy.convection:
+        if self._parameters.energy.convection:
             self._heat_flux += self.convective_heat_flux()
-        if self.evaluator.parameters.energy.gravitational_separation:
+        if self._parameters.energy.gravitational_separation:
             self._heat_flux += self.gravitational_separation_flux
-        if self.evaluator.parameters.energy.mixing:
+        if self._parameters.energy.mixing:
             self._heat_flux += self.mixing_flux
         # Heating
         self._heating = np.zeros_like(self.temperature_staggered)
-        if self.evaluator.parameters.energy.radionuclides:
+        if self._parameters.energy.radionuclides:
             self._heating += self.radiogenic_heating(time)
 
 
@@ -295,62 +306,69 @@ class Evaluator:
     """Contains classes that evaluate quantities necessary to compute the interior evolution.
 
     Args:
-        parameters: Parameters
+        _parameters: Parameters
 
     Attributes:
         parameters: Parameters
         boundary_conditions: Boundary conditions
         initial_condition: Initial condition
         mesh: Mesh
+        phase: Phase evaluator
         phase_basic: Phase evaluator for the basic mesh
         phase_staggered: Phase evaluator for the staggered mesh
         radionuclides: Radionuclides
     """
 
-    parameters: Parameters
+    _parameters: Parameters
     boundary_conditions: BoundaryConditions = field(init=False)
     initial_condition: InitialCondition = field(init=False)
     mesh: Mesh = field(init=False)
-    phase_basic: PhaseEvaluator = field(init=False)
-    phase_staggered: PhaseEvaluator = field(init=False)
+    phase_liquid: PhaseEvaluatorProtocol = field(init=False)
+    phase_solid: PhaseEvaluatorProtocol = field(init=False)
+    phase_mixed: MixedPhaseEvaluatorProtocol = field(init=False)
+    phase_composite: MixedPhaseEvaluatorProtocol = field(init=False)
+    phase: PhaseEvaluatorProtocol = field(init=False)
+    phase_basic: PhaseEvaluatorProtocol = field(init=False)
+    phase_staggered: PhaseEvaluatorProtocol = field(init=False)
 
     def __post_init__(self):
-        self.mesh = Mesh(self.parameters)
-        self.boundary_conditions = BoundaryConditions(self.parameters, self.mesh)
-        self.initial_condition = InitialCondition(self.parameters, self.mesh)
+        self.mesh = Mesh(self._parameters)
+        self.boundary_conditions = BoundaryConditions(self._parameters, self.mesh)
+        self.initial_condition = InitialCondition(self._parameters, self.mesh)
 
-        phase_to_use: str = self.parameters.phase_mixed.phase
+        phase_to_use: str = self._parameters.phase_mixed.phase
 
-        # Set the phase evaluator
+        self.phase_liquid = SinglePhaseEvaluator(
+            self._parameters.phase_liquid, self._parameters.mesh
+        )
+        self.phase_solid = SinglePhaseEvaluator(
+            self._parameters.phase_solid, self._parameters.mesh
+        )
+        self.phase_mixed = MixedPhaseEvaluator(
+            self._parameters.phase_mixed, self.phase_solid, self.phase_liquid
+        )
+        self.phase_composite = CompositePhaseEvaluator(
+            self.phase_solid, self.phase_liquid, self.phase_mixed
+        )
+
         if phase_to_use == "liquid":
-            phase: PhaseEvaluator = SinglePhaseEvaluator(
-                self.parameters.phase_liquid, self.parameters.mesh
-            )
-
+            self.phase = self.phase_liquid
         elif phase_to_use == "solid":
-            phase = SinglePhaseEvaluator(self.parameters.phase_solid, self.parameters.mesh)
-
+            self.phase = self.phase_solid
         elif phase_to_use == "mixed":
-            solid: SinglePhaseEvaluator = SinglePhaseEvaluator(
-                self.parameters.phase_solid, self.parameters.mesh
-            )
-            liquid: SinglePhaseEvaluator = SinglePhaseEvaluator(
-                self.parameters.phase_liquid, self.parameters.mesh
-            )
-            mixed: MixedPhaseEvaluator = MixedPhaseEvaluator(
-                self.parameters.phase_mixed, solid, liquid
-            )
-            phase = CompositePhaseEvaluator(solid, liquid, mixed)
+            self.phase = self.phase_mixed
+        else:
+            raise ValueError("phase must be liquid, solid, or mixed")
 
         # Set the pressure since this will not change during a model run.
-        self.phase_basic = copy.deepcopy(phase)
+        self.phase_basic = copy.deepcopy(self.phase)
         self.phase_basic.set_pressure(self.mesh.basic.pressure)
-        self.phase_staggered = copy.deepcopy(phase)
+        self.phase_staggered = copy.deepcopy(self.phase)
         self.phase_staggered.set_pressure(self.mesh.staggered.pressure)
 
     @property
     def radionuclides(self) -> list[_Radionuclide]:
-        return self.parameters.radionuclides
+        return self._parameters.radionuclides
 
 
 class Solver:
@@ -388,7 +406,7 @@ class Solver:
         """Initializes the model."""
         logger.info("Initializing %s", self.__class__.__name__)
         self.evaluator = Evaluator(self.parameters)
-        self.state = State(self.evaluator)
+        self.state = State(self.evaluator, self.parameters)
 
     @property
     def temperature_basic(self) -> np.ndarray:
@@ -398,7 +416,7 @@ class Solver:
     @property
     def temperature_staggered(self) -> np.ndarray:
         """Temperature of the staggered mesh in K"""
-        temperature: np.ndarray = self.solution.y * self.evaluator.parameters.scalings.temperature
+        temperature: np.ndarray = self.solution.y * self.parameters.scalings.temperature
 
         return temperature
 
@@ -452,12 +470,12 @@ class Solver:
     def solve(self) -> None:
         """Solves the system of ODEs to determine the interior temperature profile."""
 
-        start_time: float = self.evaluator.parameters.solver.start_time
+        start_time: float = self.parameters.solver.start_time
         logger.debug("start_time = %f", start_time)
-        end_time: float = self.evaluator.parameters.solver.end_time
+        end_time: float = self.parameters.solver.end_time
         logger.debug("end_time = %f", end_time)
-        atol: float = self.evaluator.parameters.solver.atol
-        rtol: float = self.evaluator.parameters.solver.rtol
+        atol: float = self.parameters.solver.atol
+        rtol: float = self.parameters.solver.rtol
 
         self._solution = solve_ivp(
             self.dTdt,

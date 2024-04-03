@@ -24,8 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from spider import CFG_TEST_DATA, REFERENCE_TEST_DATA, Solver, __version__, debug_logger
-
-# from spider.output import Output
+from spider.output import Output
 from spider.utilities import profile_decorator
 
 logger: logging.Logger = debug_logger()
@@ -40,7 +39,7 @@ def test_version():
     assert __version__ == "0.1.0"
 
 
-@profile_decorator
+# @profile_decorator
 def test_liquid_no_heating():
     """Cooling of a purely molten magma ocean."""
 
@@ -50,8 +49,8 @@ def test_liquid_no_heating():
     calculated: np.ndarray = solver.temperature_staggered[:, -1]
     # np.savetxt("abe_liquid_no_heating.dat", calculated)
 
-    # output: Output = Output(solver)
-    # output.plot()
+    output: Output = Output(solver)
+    output.plot()
 
     expected: np.ndarray = np.loadtxt(REFERENCE_TEST_DATA / Path("abe_liquid_no_heating.dat"))
     logger.info("calculated = %s", calculated)

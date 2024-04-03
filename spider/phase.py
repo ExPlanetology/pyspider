@@ -26,7 +26,11 @@ from dataclasses import KW_ONLY, Field, dataclass, field, fields
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
 
-from spider.interfaces import PhaseEvaluator, PropertyProtocol
+from spider.interfaces import (
+    PhaseEvaluatorABC,
+    PhaseEvaluatorProtocol,
+    PropertyProtocol,
+)
 from spider.parser import _MeshSettings, _PhaseMixedSettings, _PhaseSettings
 from spider.utilities import (
     FloatOrArray,
@@ -156,7 +160,7 @@ class LookupProperty2D(PropertyProtocol):
         return self.eval(temperature, pressure)
 
 
-class SinglePhaseEvaluator(PhaseEvaluator):
+class SinglePhaseEvaluator(PhaseEvaluatorABC):
     """Contains the objects to evaluate the EOS and transport properties of a phase.
 
     Args:
@@ -242,7 +246,7 @@ class SinglePhaseEvaluator(PhaseEvaluator):
         return self._viscosity(self.temperature, self.pressure)
 
 
-class MixedPhaseEvaluator(PhaseEvaluator):
+class MixedPhaseEvaluator(PhaseEvaluatorABC):
     """Evaluates the EOS and transport properties of a mixed phase.
 
     This only computes quantities within the mixed phase region between the solidus and the
@@ -269,14 +273,12 @@ class MixedPhaseEvaluator(PhaseEvaluator):
     def __init__(
         self,
         settings: _PhaseMixedSettings,
-        solid: PhaseEvaluator,
-        liquid: PhaseEvaluator,
+        solid: PhaseEvaluatorProtocol,
+        liquid: PhaseEvaluatorProtocol,
     ):
         self.settings: _PhaseMixedSettings = settings
-        # TODO: Might not be necessary to copy, but since the temperature is fixed to the melting
-        # curves this might prevent problems and eliminates unneccesary updating
-        self._solid: PhaseEvaluator = copy.deepcopy(solid)
-        self._liquid: PhaseEvaluator = copy.deepcopy(liquid)
+        self._solid: PhaseEvaluatorProtocol = copy.deepcopy(solid)
+        self._liquid: PhaseEvaluatorProtocol = copy.deepcopy(liquid)
         self._solidus: LookupProperty1D = self._get_melting_curve_lookup(
             "solidus", self.settings.solidus
         )
@@ -284,7 +286,6 @@ class MixedPhaseEvaluator(PhaseEvaluator):
             "liquidus", self.settings.liquidus
         )
 
-    @override
     def set_pressure(self, pressure: np.ndarray) -> None:
         """Sets pressure and updates quantities that only depend on pressure"""
         super().set_pressure(pressure)
@@ -300,7 +301,6 @@ class MixedPhaseEvaluator(PhaseEvaluator):
         # Heat capacity of the mixed phase :cite:p:`{Equation 4,}SOLO07`
         self._heat_capacity = self.settings.latent_heat_of_fusion / self.delta_fusion()
 
-    @override
     def update(self):
         """Minimises the number of function evaluations."""
 
@@ -369,7 +369,7 @@ class MixedPhaseEvaluator(PhaseEvaluator):
         return liquidus
 
     def liquidus_gradient(self) -> np.ndarray:
-        """Liquidus gradient"""
+        """Liquidus gradient with respect to pressure"""
         return self._liquidus.gradient(self.pressure)
 
     def melt_fraction_no_clip(self) -> np.ndarray:
@@ -396,7 +396,7 @@ class MixedPhaseEvaluator(PhaseEvaluator):
         return solidus
 
     def solidus_gradient(self) -> np.ndarray:
-        """Solidus gradient"""
+        """Solidus gradient with respect to pressure"""
         return self._solidus.gradient(self.pressure)
 
     @override
@@ -424,7 +424,7 @@ class MixedPhaseEvaluator(PhaseEvaluator):
         return LookupProperty1D(name=name, value=value_array)
 
 
-class CompositePhaseEvaluator(PhaseEvaluator):
+class CompositePhaseEvaluator(PhaseEvaluatorABC):
     """Evaluates the EOS and transport properties of a composite phase.
 
     This combines the single phase evaluators for the liquid and solid regions with the mixed phase
@@ -450,12 +450,12 @@ class CompositePhaseEvaluator(PhaseEvaluator):
 
     def __init__(
         self,
-        solid: PhaseEvaluator,
-        liquid: PhaseEvaluator,
+        solid: PhaseEvaluatorProtocol,
+        liquid: PhaseEvaluatorProtocol,
         mixed: MixedPhaseEvaluator,
     ):
-        self.solid: PhaseEvaluator = copy.deepcopy(solid)
-        self.liquid: PhaseEvaluator = copy.deepcopy(liquid)
+        self.solid: PhaseEvaluatorProtocol = copy.deepcopy(solid)
+        self.liquid: PhaseEvaluatorProtocol = copy.deepcopy(liquid)
         self.mixed: MixedPhaseEvaluator = copy.deepcopy(mixed)
 
     @override
@@ -520,6 +520,9 @@ class CompositePhaseEvaluator(PhaseEvaluator):
     def liquidus(self) -> np.ndarray:
         return self.mixed.liquidus()
 
+    def liquidus_gradient(self) -> np.ndarray:
+        return self.mixed.liquidus_gradient()
+
     @override
     def melt_fraction(self) -> np.ndarray:
         """Melt fraction"""
@@ -527,6 +530,9 @@ class CompositePhaseEvaluator(PhaseEvaluator):
 
     def solidus(self) -> np.ndarray:
         return self.mixed.solidus()
+
+    def solidus_gradient(self) -> np.ndarray:
+        return self.mixed.solidus_gradient()
 
     @override
     def thermal_conductivity(self) -> np.ndarray:

@@ -19,18 +19,15 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import OptimizeResult
 
-from spider.solver import Evaluator
+from spider.parser import Parameters
+from spider.solver import Evaluator, Solver, State
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from spider.solver import Solver, State
 
 
 class Output:
@@ -38,8 +35,9 @@ class Output:
 
     def __init__(self, solver: Solver):
         self.solver: Solver = solver
+        self.parameters: Parameters = self.solver.parameters
         self.solution: OptimizeResult = self.solver.solution
-        self.data: Evaluator = self.solver.data
+        self.evaluator: Evaluator = self.solver.evaluator
         self.state: State = self.solver.state
 
     @property
@@ -55,91 +53,93 @@ class Output:
     @property
     def convective_heat_flux_basic(self) -> np.ndarray:
         """Convective heat flux"""
-        return self.state.convective_heat_flux() * self.data.parameters.scalings.heat_flux
+        return self.state.convective_heat_flux() * self.parameters.scalings.heat_flux
 
     @property
     def density_basic(self) -> np.ndarray:
         """Density"""
         return (
-            self.solver.state.phase_basic.density
+            self.solver.state.evaluator.phase_basic.density()
             * np.ones(self.shape_basic)
-            * self.data.parameters.scalings.density
+            * self.parameters.scalings.density
         )
 
     @property
     def dTdr(self) -> np.ndarray:
         """dTdr"""
-        return self.solver.state.dTdr * self.data.parameters.scalings.temperature_gradient
+        return self.solver.state.dTdr() * self.parameters.scalings.temperature_gradient
 
     @property
     def dTdrs(self) -> np.ndarray:
         """dTdrs"""
         return (
-            self.solver.state.phase_basic.dTdrs
-            * self.data.parameters.scalings.temperature_gradient
+            self.solver.state.evaluator.phase_basic.dTdrs()
+            * self.parameters.scalings.temperature_gradient
         )
 
     @property
     def heat_capacity_basic(self) -> np.ndarray:
         """Heat capacity"""
         return (
-            self.solver.state.phase_basic.heat_capacity
+            self.solver.state.evaluator.phase_basic.heat_capacity()
             * np.ones(self.shape_basic)
-            * self.data.parameters.scalings.heat_capacity
+            * self.parameters.scalings.heat_capacity
         )
 
-    @property
-    def liquidus_K_staggered(self) -> np.ndarray:
-        """Liquidus"""
-        return (
-            self.data.mixed.liquidus(self.solution.y, self.data.mesh.staggered.eos.pressure)
-            * self.data.parameters.scalings.temperature
-        )
+    # @property
+    # def liquidus_K_staggered(self) -> np.ndarray:
+    #     """Liquidus"""
+    #     return (
+    #         self.data.mixed.liquidus(self.solution.y, self.evaluator.mesh.staggered.eos.pressure)
+    #         * self.data.parameters.scalings.temperature
+    #     )
 
-    @property
-    def melt_fraction_staggered(self) -> np.ndarray:
-        """Melt fraction"""
-        return self.solver.data.phase.melt_fraction(
-            self.solution.y, self.data.mesh.staggered.eos.pressure
-        ) * np.ones(self.shape_staggered)
+    # @property
+    # def melt_fraction_staggered(self) -> np.ndarray:
+    #     """Melt fraction"""
+    #     return self.solver.evaluator.phase_staggered.melt_fraction(
+    #         self.solution.y, self.data.mesh.staggered.eos.pressure
+    #     ) * np.ones(self.shape_staggered)
 
     @property
     def radii_km_basic(self) -> np.ndarray:
         """Radii of the basic mesh in km"""
-        return self.data.mesh.basic.radii * self.data.parameters.scalings.radius * 1.0e-3
+        return self.evaluator.mesh.basic.radii * self.parameters.scalings.radius * 1.0e-3
 
     @property
     def pressure_GPa_basic(self) -> np.ndarray:
         """Pressure of the basic mesh in GPa"""
-        return self.data.mesh.basic.eos.pressure * self.data.parameters.scalings.pressure * 1.0e-9
+        return self.evaluator.mesh.basic._eos.pressure * self.parameters.scalings.pressure * 1.0e-9
 
     @property
     def pressure_GPa_staggered(self) -> np.ndarray:
         """Pressure of the staggered mesh in GPa"""
         return (
-            self.data.mesh.staggered.eos.pressure * self.data.parameters.scalings.pressure * 1.0e-9
+            self.evaluator.mesh.staggered._eos.pressure
+            * self.parameters.scalings.pressure
+            * 1.0e-9
         )
 
-    @property
-    def solidus_K_staggered(self) -> np.ndarray:
-        """Solidus"""
-        return (
-            self.data.mixed.solidus(self.solution.y, self.data.mesh.staggered.eos.pressure)
-            * self.data.parameters.scalings.temperature
-        )
+    # @property
+    # def solidus_K_staggered(self) -> np.ndarray:
+    #     """Solidus"""
+    #     return (
+    #         self.data.mixed.solidus(self.solution.y, self.data.mesh.staggered.eos.pressure)
+    #         * self.data.parameters.scalings.temperature
+    #     )
 
     @property
     def super_adiabatic_temperature_gradient_basic(self) -> np.ndarray:
         """Super adiabatic temperature gradient"""
         return (
             self.state.super_adiabatic_temperature_gradient
-            * self.data.parameters.scalings.temperature_gradient
+            * self.parameters.scalings.temperature_gradient
         )
 
     @property
     def temperature_K_basic(self) -> np.ndarray:
         """Temperature of the basic mesh in K"""
-        return self.state.temperature_basic * self.data.parameters.scalings.temperature
+        return self.state.temperature_basic * self.parameters.scalings.temperature
 
     @property
     def temperature_K_staggered(self) -> np.ndarray:
@@ -150,24 +150,24 @@ class Output:
     def thermal_expansivity_basic(self) -> np.ndarray:
         """Thermal expansivity"""
         return (
-            self.solver.state.phase_basic.thermal_expansivity
+            self.solver.state.evaluator.phase_basic.thermal_expansivity()
             * np.ones(self.shape_basic)
-            * self.data.parameters.scalings.thermal_expansivity
+            * self.parameters.scalings.thermal_expansivity
         )
 
     @property
     def log10_viscosity_basic(self) -> np.ndarray:
         """Viscosity of the basic mesh"""
         return np.log10(
-            self.state.phase_basic.viscosity
-            * self.data.parameters.scalings.viscosity
+            self.state.evaluator.phase_basic.viscosity()
+            * self.parameters.scalings.viscosity
             * np.ones(self.shape_basic)
         )
 
     @property
     def times(self) -> np.ndarray:
         """Times in years"""
-        return self.solution.t * self.data.parameters.scalings.time_years
+        return self.solution.t * self.parameters.scalings.time_years
 
     @property
     def time_range(self) -> float:
@@ -191,12 +191,12 @@ class Output:
         # Calculate the time step based on the total number of lines.
         time_step: float = self.time_range / (num_lines - 1)
 
-        # plot temperature
-        try:
-            axs[0].plot(self.liquidus_K_staggered, self.pressure_GPa_staggered, "k--")
-            axs[0].plot(self.solidus_K_staggered, self.pressure_GPa_staggered, "k--")
-        except AttributeError:
-            pass
+        # # plot temperature
+        # try:
+        #     axs[0].plot(self.liquidus_K_staggered, self.pressure_GPa_staggered, "k--")
+        #     axs[0].plot(self.solidus_K_staggered, self.pressure_GPa_staggered, "k--")
+        # except AttributeError:
+        #     pass
 
         # Plot the first line.
         def plot_times(ax, x: np.ndarray, y: np.ndarray) -> None:
@@ -226,9 +226,9 @@ class Output:
         axs[0].set_xlabel("Temperature (K)")
         axs[0].set_title("Temperature")
 
-        plot_times(axs[1], self.melt_fraction_staggered, self.pressure_GPa_staggered)
-        axs[1].set_xlabel("Melt fraction")
-        axs[1].set_title("Melt fraction")
+        # plot_times(axs[1], self.melt_fraction_staggered, self.pressure_GPa_staggered)
+        # axs[1].set_xlabel("Melt fraction")
+        # axs[1].set_title("Melt fraction")
 
         plot_times(axs[2], self.log10_viscosity_basic, self.pressure_GPa_basic)
         axs[2].set_xlabel("Log10(viscosity)")
